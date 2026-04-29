@@ -18,7 +18,7 @@
         }
       ],
       "environment": [
-        { "name": "APP_MESSAGE", "value": "${APP_MESSAGE}" },
+        { "name": "APP_MESSAGE", "value": "Matheus Cruz" },
         { "name": "LOG_LEVEL", "value": "INFO" }
       ],
       "secrets": [],
