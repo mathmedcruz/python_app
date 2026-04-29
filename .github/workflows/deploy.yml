@@ -1,0 +1,78 @@
+name: Deploy to ECS dev
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-dev
+  cancel-in-progress: false
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: sa-east-1
+  ECR_REPOSITORY: dev-python_app
+  ECS_CLUSTER: revert-cloud-infra-dev
+  ECS_SERVICE: svc-dev-python_app
+  CONTAINER_NAME: python_app
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: dev
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push image
+        id: build
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+        run: |
+          IMAGE_TAG="${GITHUB_SHA::7}"
+          IMAGE_URI="$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+          docker build \
+            -t "$IMAGE_URI" \
+            -t "$REGISTRY/$ECR_REPOSITORY:latest" \
+            .
+          docker push "$IMAGE_URI"
+          docker push "$REGISTRY/$ECR_REPOSITORY:latest"
+          echo "image=$IMAGE_URI" >> "$GITHUB_OUTPUT"
+
+      - name: Substitute role ARNs in task definition
+        env:
+          EXECUTION_ROLE_ARN: ${{ vars.AWS_EXECUTION_ROLE_ARN }}
+          TASK_ROLE_ARN: ${{ vars.AWS_TASK_ROLE_ARN }}
+        run: |
+          envsubst '${EXECUTION_ROLE_ARN} ${TASK_ROLE_ARN}' \
+            < task-definition.json \
+            > task-definition.rendered.json
+
+      - name: Render image into task definition
+        id: render
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: task-definition.rendered.json
+          container-name: ${{ env.CONTAINER_NAME }}
+          image: ${{ steps.build.outputs.image }}
+
+      - name: Deploy to ECS
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.render.outputs.task-definition }}
+          service: ${{ env.ECS_SERVICE }}
+          cluster: ${{ env.ECS_CLUSTER }}
+          wait-for-service-stability: true
